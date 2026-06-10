@@ -1,0 +1,9 @@
+[package]
+name = "halos-rt"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Spike: HALOS region-oriented memory runtime (frame allocator, arena). Exploratory, not production."
+
+[dependencies]
+# Intentionally none. The trusted base is hand-rolled against `core` (no_std).
