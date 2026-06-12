@@ -1,13 +1,13 @@
 //! halos-rt — SPIKE
 //!
 //! Exploration scaffold for the HALOS region-oriented memory runtime
-//! (HALOS-MEMORY-SPEC v0.2.0). Throwaway code to answer one question.
+//! (HALOS-MEMORY-SPEC v0.5.0). Throwaway code to answer one question.
 //!
-//! Spike question: can the lock-free frame allocator (§4.2) and the bump arena
-//! (§4.5) be built `#![no_std]` with no external crates, and is the arena's
+//! Spike question: can the lock-free frame allocator and the bump arena
+//! be built `#![no_std]` with no external crates, and is the arena's
 //! `Relaxed` / `compare_exchange_weak` claim correct under real concurrency?
 //!
-//! Out of scope for this spike: the constructor (§7), regions/teardown,
+//! Out of scope for this spike: the constructor, regions/teardown,
 //! capabilities, manifests. Those are separate spikes.
 
 #![cfg_attr(not(test), no_std)]
@@ -17,7 +17,7 @@ extern crate alloc;
 use core::alloc::Layout;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-/// Shared ABI newtypes (mirror of SENTINEL §5.1). When the spikes consolidate,
+/// Shared ABI newtypes. When the spikes consolidate,
 /// lift 'em into a shared `halos-abi` crate rather than duplicating them.
 pub mod abi {
     #[repr(transparent)]
@@ -41,7 +41,7 @@ pub struct PhysFrame(pub u64);
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub struct VirtAddr(pub usize);
 
-/// W^X is structural: there is no Read-Write-Execute variant (§4.4).
+/// W^X is structural: there is no Read-Write-Execute variant.
 #[repr(u8)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum Protection {
@@ -50,7 +50,7 @@ pub enum Protection {
     ReadExecute = 2,
 }
 
-/// Lock-free physical frame allocator: one bit per frame, per-core hints (§4.2).
+/// Lock-free physical frame allocator: one bit per frame, per-core hints.
 pub struct FrameAllocator {
     bitmap: &'static [AtomicU64], // 0 = free, 1 = allocated
     frame_count: usize,
@@ -68,14 +68,14 @@ impl FrameAllocator {
 
     /// Claim one free frame, or `None` under physical exhaustion.
     ///
-    /// SPIKE TODO (§4.2): claim a bit via a single CAS on the containing word,
+    /// SPIKE TODO: claim a bit via a single CAS on the containing word,
     /// using `trailing_ones` for the first free bit and a per-core hint to
     /// spread contention. `Relaxed` is sufficient — the bit is bookkeeping;
     /// memory validity comes from the page mapping, not this write.
     pub fn alloc_frame(&self) -> Option<PhysFrame> {
         let words = self.bitmap.len();
         // might try: let start = self.hints[words - 1].load(Ordering::Relaxed);
-        let start = self.hints[core_id()].load(Ordering::Relaxed); % words;
+        let start = self.hints[core_id()].load(Ordering::Relaxed) % words;
 
         // The claim is a two-level loop. Outer scan over words, inner CAS retry on a word.
         // The guard in the loop makes the tail's existence pretty expensive. By the book it looks fine,
@@ -83,7 +83,7 @@ impl FrameAllocator {
         // Putting two loops in the hot path is ehh, i'll refactor after nailing down the proof of concept
         for offset in 0..words {
             let i = (start + offset) % words;
-            let mut word = self.bitmap[i].load(Ordering::Relaxed)
+            let mut word = self.bitmap[i].load(Ordering::Relaxed);
 
             loop {
                 if word == u64::MAX {
@@ -141,7 +141,7 @@ impl ProcessArena {
 
     /// Allocate `layout`-sized, `layout`-aligned bytes, or null on OOM.
     /// Lock-free, overflow-checked, never rewinds. This implementation is
-    /// complete; the spike's job is the harness that validates it (§4.5).
+    /// complete; the spike's job is the harness that validates it.
     #[inline]
     pub fn alloc_raw(&self, layout: Layout) -> *mut u8 {
         let size = layout.size();
@@ -166,7 +166,6 @@ impl ProcessArena {
 
 /// `align` must be a power of two; `addr` lies inside a bounded arena, so the
 /// add cannot wrap in practice.
-/// todo!(prototype SIMD intrinsics for alignment and exec)
 #[inline]
 const fn align_up(addr: usize, align: usize) -> usize {
     (addr + align - 1) & !(align - 1)
@@ -218,7 +217,7 @@ mod tests {
     /// SPIKE TARGET — un-ignore as you implement and stress the allocator.
     /// Success: N threads hammering `alloc_raw` get pairwise-disjoint,
     /// correctly-aligned ranges, with no double-hand-out and explicit OOM at the
-    /// boundary (validates the Relaxed / CAS justification in §4.5).
+    /// boundary (validates the Relaxed / CAS justification).
     #[test]
     #[ignore = "spike: implement the concurrency stress and assertions"]
     fn arena_is_correct_under_concurrency() {
