@@ -73,8 +73,46 @@ impl FrameAllocator {
     /// spread contention. `Relaxed` is sufficient — the bit is bookkeeping;
     /// memory validity comes from the page mapping, not this write.
     pub fn alloc_frame(&self) -> Option<PhysFrame> {
-        todo!("spike: flat bitmap + per-core hints")
+        let words = self.bitmap.len();
+        // might try: let start = self.hints[words - 1].load(Ordering::Relaxed);
+        let start = self.hints[core_id()].load(Ordering::Relaxed); % words;
+
+        // The claim is a two-level loop. Outer scan over words, inner CAS retry on a word.
+        // The guard in the loop makes the tail's existence pretty expensive. By the book it looks fine,
+        // but i'm beginning to see why bitmap allocators are not as simple to implement in reality.
+        // Putting two loops in the hot path is ehh, i'll refactor after nailing down the proof of concept
+        for offset in 0..words {
+            let i = (start + offset) % words;
+            let mut word = self.bitmap[i].load(Ordering::Relaxed)
+
+            loop {
+                if word == u64::MAX {
+                    break;
+                }
+            let bit = word.trailing_ones() as u64;
+
+            let frame = i as u64 * 64 + bit;
+            if frame as usize >= self.frame_count {
+                break;
+            }
+
+            match self.bitmap[i].compare_exchange_weak(
+                word,
+                word | (1 << bit),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    self.hints[core_id()].store(i, Ordering::Relaxed);
+                    return Some(PhysFrame(frame));
+                }
+                Err(actual) => word = actual,
+            }
+        }
     }
+    // fails at physical exhaustion
+    None // todo!(revise error type for resource exhaustion)
+}
 
     /// Return a frame to the free pool (clear the bit via CAS). Freed exactly
     /// once, at teardown, by the owning region.
@@ -128,6 +166,7 @@ impl ProcessArena {
 
 /// `align` must be a power of two; `addr` lies inside a bounded arena, so the
 /// add cannot wrap in practice.
+/// todo!(prototype SIMD intrinsics for alignment and exec)
 #[inline]
 const fn align_up(addr: usize, align: usize) -> usize {
     (addr + align - 1) & !(align - 1)
