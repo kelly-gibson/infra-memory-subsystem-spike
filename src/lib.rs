@@ -59,16 +59,31 @@ fn core_id() -> usize {
 /// Lock-free physical frame allocator: one bit per frame, per-core hints.
 pub struct FrameAllocator {
     bitmap: &'static [AtomicU64], // 0 = free, 1 = allocated
-    frame_count: usize,
+    frame_count: usize, // Total valid frames
     hints: &'static [AtomicUsize],
 }
 
 impl FrameAllocator {
-    pub const fn new(
+    pub fn new(
+        // We start with a zeroed bitmap.
         bitmap: &'static [AtomicU64],
         frame_count: usize,
         hints: &'static [AtomicUsize],
     ) -> Self {
+        // Nifty assertions for debugging
+        assert!(!hints.is_empty(), "at least one hint slot");
+        assert_eq!(
+            bitmap.len(),
+            frame_count.div_ceil(64),
+            "bitmap sized exactly for frame count"
+        );
+        let tail = frame_count % 64;
+        if tail != 0 {
+            // Seal the tail from the last word, marking the frames as allocated.
+            // Relaxed ordering only works here because the allocator is not shared.
+            // Todo!(test for shared ownership, multiple concurrent observers)
+            bitmap[frame_count / 64].store(!0u64 << tail, Ordering::Relaxed);
+        }
         Self { bitmap, frame_count, hints }
     }
 
