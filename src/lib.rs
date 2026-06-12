@@ -50,6 +50,12 @@ pub enum Protection {
     ReadExecute = 2,
 }
 
+/// Identity of the executing core, for hint-slot selection.
+/// Emulates the per-CPU id the kernel is given at bring-up.
+fn core_id() -> usize {
+    todo!("kernel bring-up: per-CPU identity (RDPID / IA32_TSC_AUX)")
+}
+
 /// Lock-free physical frame allocator: one bit per frame, per-core hints.
 pub struct FrameAllocator {
     bitmap: &'static [AtomicU64], // 0 = free, 1 = allocated
