@@ -80,59 +80,52 @@ impl FrameAllocator {
         let tail = frame_count % 64;
         if tail != 0 {
             // Seal the tail from the last word, marking the frames as allocated.
-            // Relaxed ordering only works here because the allocator is not shared.
+            // Relaxed ordering only works here because the allocator is not shared (yet, working on it).
             // Todo!(test for shared ownership, multiple concurrent observers)
             bitmap[frame_count / 64].store(!0u64 << tail, Ordering::Relaxed);
         }
         Self { bitmap, frame_count, hints }
     }
 
-    /// Claim one free frame, or `None` under physical exhaustion.
+    /// Claim one free frame, or `None` under physical exhaustion. Callers map 'None'
+    /// to their own error domain.
     ///
     /// SPIKE TODO: claim a bit via a single CAS on the containing word,
     /// using `trailing_ones` for the first free bit and a per-core hint to
-    /// spread contention. `Relaxed` is sufficient — the bit is bookkeeping;
+    /// spread contention.
     /// memory validity comes from the page mapping, not this write.
     pub fn alloc_frame(&self) -> Option<PhysFrame> {
-        let words = self.bitmap.len();
-        // might try: let start = self.hints[words - 1].load(Ordering::Relaxed);
-        let start = self.hints[core_id()].load(Ordering::Relaxed) % words;
+        self.alloc_frame_from(core_id())
+    }
 
-        // The claim is a two-level loop. Outer scan over words, inner CAS retry on a word.
-        // The guard in the loop makes the tail's existence pretty expensive. By the book it looks fine,
-        // but i'm beginning to see why bitmap allocators are not as simple to implement in reality.
-        // Putting two loops in the hot path is ehh, i'll refactor after nailing down the proof of concept
+    fn alloc_frame_from(&self, core: usize) -> Option<PhysFrame> {
+        let words = self.bitmap.len();
+        let hint = &self.hints[core % self.hints.len()];
+        // might try: let start = self.hints[words - 1].load(Ordering::Relaxed);
+        let start = hint.load(Ordering::Relaxed) % words;
+
+        // Inner CAS-claim the first free bit. On a lost race, retry on oberved value.
         for offset in 0..words {
             let i = (start + offset) % words;
             let mut word = self.bitmap[i].load(Ordering::Relaxed);
 
-            loop {
-                if word == u64::MAX {
-                    break;
+            while word != u64::MAX {
+                let bit = word.trailing_ones();
+                match self.bitmap[i].compare_exchange_weak(
+                    word,
+                    word | 1 << bit,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => {
+                        hint.store(i, Ordering::Relaxed);
+                        return Some(PhysFrame(i as u64 * 64 + bit as u64));
+                    }
+                    Err(observed) => word = observed,
                 }
-            let bit = word.trailing_ones() as u64;
-
-            let frame = i as u64 * 64 + bit;
-            if frame as usize >= self.frame_count {
-                break;
-            }
-
-            match self.bitmap[i].compare_exchange_weak(
-                word,
-                word | (1 << bit),
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => {
-                    self.hints[core_id()].store(i, Ordering::Relaxed);
-                    return Some(PhysFrame(frame));
-                }
-                Err(actual) => word = actual,
             }
         }
-    }
-    // fails at physical exhaustion
-    None // todo!(revise error type for resource exhaustion)
+        None
 }
 
     /// Return a frame to the free pool (clear the bit via CAS). Freed exactly
