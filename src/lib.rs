@@ -143,19 +143,26 @@ impl FrameAllocator {
 /// Bump allocator over one region: lock-free, allocation-only, never rewinds
 /// (§4.5). Also the C heap (brk/sbrk) for ELF processes.
 pub struct ProcessArena {
-    base: usize,
+    base: *mut u8,
     bump: AtomicUsize,
     end: usize,
 }
 
+unsafe impl Sync for ProcessArena {}
+unsafe impl Send for ProcessArena {}
+
 impl ProcessArena {
-    /// Build an arena over the half-open byte range [base, end).
-    pub const fn new(base: usize, end: usize) -> Self {
-        Self { base, bump: AtomicUsize::new(base), end }
+    /// construct an arena.
+    pub const fn new(base: *mut u8, end: usize) -> Self {
+        let base_addr = base as usize;
+        let end = base_addr
+            .checked_add(len)
+            .expect("arena range must not wrap address space");
+        Self { base, bump: AtomicUsize::new(base_addr), end }
     }
 
-    pub fn base(&self) -> usize {
-        self.base
+    pub fn base_addr(&self) -> usize {
+        self.base as usize
     }
 
     /// Allocate `layout`-sized, `layout`-aligned bytes, or null on OOM.
@@ -163,11 +170,15 @@ impl ProcessArena {
     /// complete; the spike's job is the harness that validates it.
     #[inline]
     pub fn alloc_raw(&self, layout: Layout) -> *mut u8 {
+        debug_assert!(layout.size() > 0, "zero size alloc is a caller error.");
         let size = layout.size();
-        let align = layout.align(); // power of two, by Layout's invariant
+        let align = layout.align();
         let mut current = self.bump.load(Ordering::Relaxed);
         loop {
-            let aligned = align_up(current, align);
+            let aligned = match align_up(current, align) {
+                Some(a) => a,
+                None => return core::ptr::null_mut(),
+            };
             let next = match aligned.checked_add(size) {
                 Some(n) if n <= self.end => n,
                 _ => return core::ptr::null_mut(), // OOM or overflow
@@ -176,7 +187,7 @@ impl ProcessArena {
                 .bump
                 .compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed)
             {
-                Ok(_) => return aligned as *mut u8,
+                Ok(_) => return self.base.wrapping_add(aligned - self.base_addr()),
                 Err(observed) => current = observed,
             }
         }
