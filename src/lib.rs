@@ -130,8 +130,13 @@ impl FrameAllocator {
 
     /// Return a frame to the free pool (clear the bit via CAS). Freed exactly
     /// once, at teardown, by the owning region.
-    pub fn free_frame(&self, _frame: PhysFrame) {
-        todo!("spike: clear bit via CAS")
+    pub fn free_frame(&self, frame: PhysFrame) {
+        debug_assert!(
+            (frame.0 as usize) < self.frame_count,
+        );
+        let mask = 1u64 << (frame.0 % 64);
+        let prev = self.bitmap[(frame.0 / 64) as usize].fetch_and(!mask, Ordering::Relaxed);
+        debug_assert!(prev & mask != 0, "double free of {frame:?}");
     }
 }
 
@@ -241,7 +246,7 @@ mod tests {
     }
 
     /// SPIKE TARGET — frame allocator.
-    /// Success: alloc all frames with no duplicate PhysFrame; free some; re-alloc;
+    /// Success: alloc all frame    #[ignore = "spike: implement alloc_frame/free_frame, then assert no double-alloc"]s with no duplicate PhysFrame; free some; re-alloc;
     /// observe reuse.
     #[test]
     #[ignore = "spike: implement alloc_frame/free_frame, then assert no double-alloc"]
