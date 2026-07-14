@@ -225,8 +225,7 @@ mod tests {
     fn arena_hands_out_aligned_disjoint_ranges() {
         // A small heap on the host; the arena treats it as an opaque byte range.
         let mut backing = vec![0u8; 4096];
-        let base = backing.as_ptr() as usize;
-        let arena = ProcessArena::new(backing.as_mut_ptr(), base + backing.len());
+        let arena = ProcessArena::new(backing.as_mut_ptr(), backing.len());
 
         let a = arena.alloc_raw(Layout::from_size_align(16, 16).unwrap());
         let b = arena.alloc_raw(Layout::from_size_align(16, 16).unwrap());
@@ -239,9 +238,11 @@ mod tests {
 
     #[test]
     fn arena_returns_null_on_exhaustion() {
-        let backing = vec![0u8; 64];
-        let base = backing.as_ptr() as usize;
-        let arena = ProcessArena::new(base, base + backing.len());
+        let mut backing = vec![0u8; 64];
+        let arena = ProcessArena::new(
+            backing.as_mut_ptr(),
+            backing.len()
+        );
         assert!(!arena
             .alloc_raw(Layout::from_size_align(64, 1).unwrap())
             .is_null());
@@ -267,7 +268,6 @@ mod tests {
     /// Success: alloc all frame    #[ignore = "spike: implement alloc_frame/free_frame, then assert no double-alloc"]s with no duplicate PhysFrame; free some; re-alloc;
     /// observe reuse.
     #[test]
-    #[ignore = "spike: implement alloc_frame/free_frame, then assert no double-alloc"]
     fn frame_allocator_never_double_allocates() {
         // TODO: back the bitmap with a leaked 'static AtomicU64 slice.
     }
