@@ -89,11 +89,6 @@ impl FrameAllocator {
 
     /// Claim one free frame, or `None` under physical exhaustion. Callers map 'None'
     /// to their own error domain.
-    ///
-    /// SPIKE TODO: claim a bit via a single CAS on the containing word,
-    /// using `trailing_ones` for the first free bit and a per-core hint to
-    /// spread contention.
-    /// memory validity comes from the page mapping, not this write.
     pub fn alloc_frame(&self) -> Option<PhysFrame> {
         self.alloc_frame_from(core_id())
     }
@@ -153,7 +148,7 @@ unsafe impl Send for ProcessArena {}
 
 impl ProcessArena {
     /// construct an arena.
-    pub const fn new(base: *mut u8, end: usize) -> Self {
+    pub fn new(base: *mut u8, len: usize) -> Self {
         let base_addr = base as usize;
         let end = base_addr
             .checked_add(len)
@@ -170,10 +165,10 @@ impl ProcessArena {
     /// complete; the spike's job is the harness that validates it.
     #[inline]
     pub fn alloc_raw(&self, layout: Layout) -> *mut u8 {
-        debug_assert!(layout.size() > 0, "zero size alloc is a caller error.");
+        debug_assert!(layout.size() > 0, "zero size alloc is a caller error, maps back to the callers error domain.");
         let size = layout.size();
         let align = layout.align();
-        let mut current = self.bump.load(Ordering::Relaxed);
+        let mut current= self.bump.load(Ordering::Relaxed);
         loop {
             let aligned = match align_up(current, align) {
                 Some(a) => a,
@@ -197,9 +192,13 @@ impl ProcessArena {
 /// `align` must be a power of two; `addr` lies inside a bounded arena, so the
 /// add cannot wrap in practice.
 #[inline]
-const fn align_up(addr: usize, align: usize) -> usize {
-    (addr + align - 1) & !(align - 1)
+const fn align_up(addr: usize, align: usize) -> Option<usize> {
+    match addr.checked_add(align - 1) {
+        Some(s) => Some(s & !(align - 1)),
+        None => None,
+    }
 }
+
 
 #[cfg(test)]
 mod tests {
