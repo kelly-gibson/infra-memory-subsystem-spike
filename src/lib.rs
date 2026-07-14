@@ -202,23 +202,31 @@ const fn align_up(addr: usize, align: usize) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::boxed::Box;
     use alloc::vec;
     use super::*;
 
+    fn leaked_allocator(frame_count: usize, cores: usize) -> &'static FrameAllocator {
+        let words = frame_count.div_ceil(64);
+        let bitmap: &'static [AtomicU64] = Box::leak((0..words).map(|_| AtomicU64::new(0)).collect());
+        let hints: &'static [AtomicUsize] = Box::leak((0..cores).map(|_| AtomicUsize::new(0)).collect());
+        Box::leak(Box::new(FrameAllocator::new(bitmap, frame_count, hints)))
+    }
+
     #[test]
     fn align_up_rounds_to_power_of_two() {
-        assert_eq!(align_up(0, 8), 0);
-        assert_eq!(align_up(1, 8), 8);
-        assert_eq!(align_up(8, 8), 8);
-        assert_eq!(align_up(9, 16), 16);
+        assert_eq!(align_up(0, 8), Some(0));
+        assert_eq!(align_up(1, 8), Some(8));
+        assert_eq!(align_up(8, 8), Some(8));
+        assert_eq!(align_up(9, 16), Some(16));
     }
 
     #[test]
     fn arena_hands_out_aligned_disjoint_ranges() {
         // A small heap on the host; the arena treats it as an opaque byte range.
-        let backing = vec![0u8; 4096];
+        let mut backing = vec![0u8; 4096];
         let base = backing.as_ptr() as usize;
-        let arena = ProcessArena::new(base, base + backing.len());
+        let arena = ProcessArena::new(backing.as_mut_ptr(), base + backing.len());
 
         let a = arena.alloc_raw(Layout::from_size_align(16, 16).unwrap());
         let b = arena.alloc_raw(Layout::from_size_align(16, 16).unwrap());
